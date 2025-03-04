@@ -51,40 +51,45 @@ def save_fitness_record():
         return jsonify({"error": str(e)}), 500
 
 
-@bmi_bp.route('/api/fitness/last-two-records', methods=['GET'])
-def get_last_two_records():
-    user_id = request.args.get('user_id')  # Get user ID from query parameters
+@bmi_bp.route('/fitness/latest/<user_id>', methods=['GET'])
+def get_latest_fitness_records(user_id):
+    """Fetch the two most recent fitness records of the user"""
+    try:
+        print(f"Received user_id: {user_id}")  # This will print the user_id in your terminal/console
 
-    # Query the last two records for the user
-    records = UserFitnessRecord.query.filter_by(user_id=user_id).order_by(UserFitnessRecord.date.desc()).limit(2).all()
+        cursor = mysql.connection.cursor()
+        cursor.execute('''
+            SELECT age, gender, height, weight, bmi, waist, hip, whr, record_date
+            FROM user_fitness_records
+            WHERE user_id = %s
+            ORDER BY record_date DESC
+            LIMIT 2
+        ''', (user_id,))
 
-    if len(records) < 2:
-        return jsonify({'message': 'Not enough records to compare'}), 400
+        records = cursor.fetchall()
+        cursor.close()
 
-    # Extract relevant data from the records
-    record_1 = {
-        'age': records[0].age,
-        'gender': records[0].gender,
-        'height': records[0].height,
-        'weight': records[0].weight,
-        'bmi': records[0].bmi,
-        'waist': records[0].waist,
-        'hip': records[0].hip,
-        'whr': records[0].whr
-    }
+        if not records:
+            print("No records found for this user_id")  # Log message for debugging
+            return jsonify({"message": "No records found"}), 404
 
-    record_2 = {
-        'age': records[1].age,
-        'gender': records[1].gender,
-        'height': records[1].height,
-        'weight': records[1].weight,
-        'bmi': records[1].bmi,
-        'waist': records[1].waist,
-        'hip': records[1].hip,
-        'whr': records[1].whr
-    }
+        result = []
+        for record in records:
+            result.append({
+                "age": record[0],
+                "gender": record[1],
+                "height": record[2],
+                "weight": record[3],
+                "bmi": record[4],
+                "waist": record[5],
+                "hip": record[6],
+                "whr": record[7],
+                "record_date": record[8].strftime("%Y-%m-%d %H:%M:%S")
+            })
 
-    return jsonify({
-        'record_1': record_1,
-        'record_2': record_2
-    })
+        print("Fetched Records:", result)  # This will show the fetched data in your terminal
+        return jsonify(result), 200
+
+    except Exception as e:
+        print(f"Error: {str(e)}")  # Print the error if any exception occurs
+        return jsonify({"error": str(e)}), 500
