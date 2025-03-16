@@ -33,19 +33,56 @@ def schedule_meeting():
     }), 201
 
 
+# @meetings_bp.route('/api/meeting-requests/<trainer_id>', methods=['GET'])
+# def get_meeting_requests(trainer_id):
+#     try:
+#         cursor = mysql.connection.cursor()
+#         cursor.execute('''
+#             SELECT * FROM meetings WHERE trainer_id = %s
+#         ''', (trainer_id,))
+#         meetings = cursor.fetchall()
+#         cursor.close()
+#
+#         return jsonify(meetings), 200
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
+
+
 @meetings_bp.route('/api/meeting-requests/<trainer_id>', methods=['GET'])
-def get_meeting_requests(trainer_id):
+def get_pending_meetings(trainer_id):
     try:
+        # Get the database connection from mysql
         cursor = mysql.connection.cursor()
-        cursor.execute('''
-            SELECT * FROM meetings WHERE trainer_id = %s
-        ''', (trainer_id,))
+
+        # Query to fetch pending meetings for a specific trainer
+        query = "SELECT * FROM meetings WHERE trainer_id = %s AND status = 'pending'"
+        cursor.execute(query, (trainer_id,))
+
+        # Fetch all results
         meetings = cursor.fetchall()
+
+        # Convert the results to dictionaries manually
+        meetings_list = []
+        for meeting in meetings:
+            meetings_dict = {
+                'id': meeting[0],
+                'trainer_id': meeting[1],
+                'user_id': meeting[2],
+                'date_time': meeting[3],
+                'status': meeting[4],
+                # Add other columns as necessary
+            }
+            meetings_list.append(meetings_dict)
+
+        # Close the cursor after use
         cursor.close()
 
-        return jsonify(meetings), 200
+        # Return the meetings data in JSON format
+        return jsonify({'data': meetings_list}), 200
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print("Error fetching meeting requests:", e)
+        return jsonify({'error': 'Failed to fetch meeting requests'}), 500
 
 
 @meetings_bp.route('/api/meeting-requests/<int:meeting_id>/accept', methods=['POST'])
