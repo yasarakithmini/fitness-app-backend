@@ -20,11 +20,13 @@ def create_app():
     from app.routes.meetings import meetings_bp
     from app.routes.bmi import bmi_bp
     from app.routes.recommendations import recommendations_bp
+    from app.routes.profile import profile_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(trainers_bp)
     app.register_blueprint(meetings_bp)
     app.register_blueprint(bmi_bp)
     app.register_blueprint(recommendations_bp)
+    app.register_blueprint(profile_bp)
 
     return app
