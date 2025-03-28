@@ -2,6 +2,17 @@ from flask import Blueprint, request, jsonify
 from app import mysql
 
 profile_bp = Blueprint('profile', __name__)
+@profile_bp.route('/user/<user_id>', methods=['GET'])
+def get_user(user_id):
+    cursor = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
+    cursor.execute("SELECT id, first_name, last_name, email FROM users WHERE id = %s", (user_id,))
+    user = cursor.fetchone()
+    cursor.close()
+
+    if user:
+        return jsonify(user)
+    else:
+        return jsonify({'message': 'User not found'}), 404
 
 @profile_bp.route('/user/update/<user_id>', methods=['POST'])
 def update_user(user_id):

@@ -2,95 +2,97 @@ from flask import Blueprint, request, jsonify
 import pandas as pd
 import json
 import uuid
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-from sklearn.impute import SimpleImputer
-from sklearn.neighbors import KNeighborsClassifier
+import os
+import joblib
 from app import mysql  # Database connection
 
-recommendations_bp = Blueprint('recommendations', __name__)  # Define Blueprint
+recommendations_bp = Blueprint('recommendations', __name__)
 
-# Load the dataset
-file_path = "C:/Users/admin/Downloads/archive (11)/megaGymDataset.csv"
-dataset = pd.read_csv(file_path)
+# Load pre-trained model and data
+model_dir = os.path.join(os.path.dirname(__file__), '../../ml_models')
 
-# Define features and target
+knn_model = joblib.load(os.path.join(model_dir, "knn_model.pkl"))
+label_encoders = joblib.load(os.path.join(model_dir, "label_encoders.pkl"))
+category_encoder = joblib.load(os.path.join(model_dir, "category_encoder.pkl"))
+dataset = joblib.load(os.path.join(model_dir, "preprocessed_dataset.pkl"))
+
 features = ["Type", "BodyPart", "Equipment", "Level"]
 target = "Title"
 
-# Drop missing target values
-dataset = dataset.dropna(subset=[target])
-
-# Handle missing values
-imputer = SimpleImputer(strategy="most_frequent")
-dataset[features] = imputer.fit_transform(dataset[features])
-
-# Encode categorical features
-label_encoders = {col: LabelEncoder() for col in features}
-for col in features:
-    dataset[col] = label_encoders[col].fit_transform(dataset[col])
-
-# Create category column combining 'BodyPart' and 'Type'
-dataset["Category"] = dataset["BodyPart"].astype(str) + "_" + dataset["Type"].astype(str)
-
-# Encode 'Category'
-category_encoder = LabelEncoder()
-dataset["Category"] = category_encoder.fit_transform(dataset["Category"])
-
-# Train k-NN model
-X = dataset[features]
-y = dataset["Category"]
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-knn_model = KNeighborsClassifier(n_neighbors=5)
-knn_model.fit(X_train, y_train)
-
 def recommend_titles(user_input):
-    """Recommend workout titles based on user inputs and BMI/WHR trends."""
+    """Recommend workout titles using KNN model and refine with health and user preferences."""
     try:
         user_id = user_input.get("user_id")
         if not user_id:
             return {"error": "User ID is required"}
 
-        # Fetch last two fitness records
+        intensity_change = 0  # Default intensity
+
+        # Fetch latest BMI, WHR, and gender
         cursor = mysql.connection.cursor()
         cursor.execute("""
-            SELECT bmi, whr FROM user_fitness_records
-            WHERE user_id = %s ORDER BY record_date DESC LIMIT 2
+            SELECT bmi, whr, gender FROM user_fitness_records
+            WHERE user_id = %s ORDER BY record_date DESC LIMIT 1
         """, (user_id,))
-        records = cursor.fetchall()
+        record = cursor.fetchone()
         cursor.close()
 
-        # Determine intensity adjustment
-        if len(records) < 2:
-            intensity_change = 0  # Default to normal intensity
+        if record:
+            latest_bmi, latest_whr, gender = record
+            healthy_bmi = 18.5 <= latest_bmi <= 24.9
+            healthy_whr = latest_whr <= (0.90 if gender.lower() == "male" else 0.85)
+
+            if not healthy_bmi or not healthy_whr:
+                if latest_bmi < 18.5 or latest_whr < 0.75:
+                    intensity_change = -2  # Very low health → Beginner only
+                else:
+                    intensity_change = -1  # Slightly unhealthy → no Expert
         else:
-            prev_bmi, prev_whr = records[1]  # Older record
-            latest_bmi, latest_whr = records[0]  # Latest record
+            intensity_change = None  # No health record
 
-            # Adjust intensity based on BMI & WHR trends
-            if latest_bmi < prev_bmi and latest_whr < prev_whr:
-                intensity_change = 1  # Increase intensity
-            elif latest_bmi > prev_bmi and latest_whr > prev_whr:
-                intensity_change = -1  # Decrease intensity
-            else:
-                intensity_change = 0  # Keep normal intensity
+        # Encode input
+        encoded_input = [label_encoders[col].transform([user_input[col]])[0] for col in features]
+        input_vector = [encoded_input]
 
-        # Encode user inputs
-        encoded_input = {col: label_encoders[col].transform([user_input[col]])[0] for col in features}
-        user_category = f"{encoded_input['BodyPart']}_{encoded_input['Type']}"
-        user_category_encoded = category_encoder.transform([user_category])[0]
+        # Predict category using model
+        predicted_category_encoded = knn_model.predict(input_vector)[0]
+        filtered_data = dataset[dataset["Category"] == predicted_category_encoded]
 
-        # Filter dataset based on user inputs
-        filtered_data = dataset[dataset["Category"] == user_category_encoded]
+        # Refine with Equipment and Level
+        equipment_encoded = encoded_input[2]
+        level_encoded = encoded_input[3]
+        filtered_data = filtered_data[
+            (filtered_data["Equipment"] == equipment_encoded) &
+            (filtered_data["Level"] == level_encoded)
+        ]
 
-        # Adjust intensity by filtering "Level"
-        if intensity_change == 1:
-            filtered_data = filtered_data[filtered_data["Level"] != label_encoders["Level"].transform(["Beginner"])[0]]
-        elif intensity_change == -1:
-            filtered_data = filtered_data[filtered_data["Level"] != label_encoders["Level"].transform(["Expert"])[0]]
+        # Apply intensity adjustments
+        if intensity_change == -1:
+            filtered_data = filtered_data[
+                filtered_data["Level"] != label_encoders["Level"].transform(["Expert"])[0]
+            ]
+        elif intensity_change == -2:
+            filtered_data = filtered_data[
+                filtered_data["Level"] == label_encoders["Level"].transform(["Beginner"])[0]
+            ]
+
+        # Fallback logic if too few or no exercises
+        if filtered_data.empty or len(filtered_data) < 7:
+            print("🔁 Fallback activated: relaxing filters")
+
+            fallback_data = dataset[dataset["Category"] == predicted_category_encoded]
+
+            # Loosen filters by allowing body-only or matching level
+            body_only_equipment = label_encoders["Equipment"].transform(["Body Only"])[0]
+            fallback_data = fallback_data[
+                (fallback_data["Level"] == level_encoded) |
+                (fallback_data["Equipment"] == body_only_equipment)
+            ]
+
+            filtered_data = pd.concat([filtered_data, fallback_data]).drop_duplicates()
 
         if filtered_data.empty:
-            return {"message": "No matches found"}
+            return {"message": "No matches found for your preferences. Try modifying your input."}
 
         recommended_titles = filtered_data[target].unique()[:7]
         return {"exercises": list(recommended_titles)}
@@ -100,7 +102,6 @@ def recommend_titles(user_input):
 
 @recommendations_bp.route('/recommendations', methods=["POST"])
 def get_recommendations():
-    """API endpoint to get and save workout recommendations."""
     try:
         user_input = request.json
         user_id = user_input.get("user_id")
@@ -110,14 +111,12 @@ def get_recommendations():
         if not user_id:
             return jsonify({"error": "User ID is required"}), 400
 
-        # Get recommended workouts
         recommendations = recommend_titles(user_input)
         if "error" in recommendations:
             return jsonify(recommendations), 500
 
         exercises = recommendations["exercises"]
 
-        # Save to database
         cursor = mysql.connection.cursor()
         cursor.execute("""
             INSERT INTO user_workout_plans (id, user_id, exercises, bmi, whr)
@@ -133,7 +132,6 @@ def get_recommendations():
 
 @recommendations_bp.route('/workout/latest/<user_id>', methods=['GET'])
 def get_latest_workout_plan(user_id):
-    """Fetch the latest saved workout plan for the user"""
     try:
         cursor = mysql.connection.cursor()
         cursor.execute("""
