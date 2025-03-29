@@ -100,6 +100,7 @@ def get_accepted_meetings(trainer_id):
                 'user_id': meeting[2],
                 'date_time': meeting[3],
                 'status': meeting[4],
+                'meeting_link': meeting[7],
             }
             meetings_list.append(meetings_dict)
 
@@ -113,16 +114,31 @@ def get_accepted_meetings(trainer_id):
 
 @meetings_bp.route('/api/meeting-requests/<int:meeting_id>/accept', methods=['POST'])
 def accept_meeting(meeting_id):
-    cursor = mysql.connection.cursor()
-    cursor.execute('''
-        UPDATE meetings
-        SET status = %s
-        WHERE id = %s
-    ''', ('accepted', meeting_id))
-    mysql.connection.commit()
-    cursor.close()
+    import uuid
 
-    return jsonify({'id': meeting_id, 'status': 'accepted'}), 200
+    try:
+        cursor = mysql.connection.cursor()
+
+        # Generate unique Jitsi meeting link
+        unique_room = f"fixfit-{uuid.uuid4().hex[:8]}"
+        meeting_link = f"https://meet.jit.si/{unique_room}"
+
+        # Update meeting status and meeting link
+        cursor.execute('''
+            UPDATE meetings
+            SET status = %s, meeting_link = %s
+            WHERE id = %s
+        ''', ('accepted', meeting_link, meeting_id))
+
+        mysql.connection.commit()
+        cursor.close()
+
+        return jsonify({'id': meeting_id, 'status': 'accepted', 'meeting_link': meeting_link}), 200
+
+    except Exception as e:
+        print(f"Error accepting meeting: {e}")
+        return jsonify({'error': 'Something went wrong while accepting the meeting'}), 500
+
 
 @meetings_bp.route('/api/meeting-requests/<int:meeting_id>/reject', methods=['POST'])
 def reject_meeting(meeting_id):
@@ -153,6 +169,7 @@ def get_user_accepted_meetings(user_id):
                 'user_id': meeting[2],
                 'date_time': meeting[3],
                 'status': meeting[4],
+                'meeting_link': meeting[7],
             }
             meetings_list.append(meetings_dict)
 
