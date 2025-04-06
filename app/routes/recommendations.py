@@ -20,13 +20,12 @@ features = ["Type", "BodyPart", "Equipment", "Level"]
 target = "Title"
 
 def recommend_titles(user_input):
-    """Recommend workout titles using KNN model and refine with health and user preferences."""
     try:
         user_id = user_input.get("user_id")
         if not user_id:
             return {"error": "User ID is required"}
 
-        intensity_change = 0  # Default intensity
+        intensity_change = 0
 
         # Fetch latest BMI, WHR, and gender
         cursor = mysql.connection.cursor()
@@ -44,21 +43,20 @@ def recommend_titles(user_input):
 
             if not healthy_bmi or not healthy_whr:
                 if latest_bmi < 18.5 or latest_whr < 0.75:
-                    intensity_change = -2  # Very low health → Beginner only
+                    intensity_change = -2
                 else:
-                    intensity_change = -1  # Slightly unhealthy → no Expert
+                    intensity_change = -1
         else:
-            intensity_change = None  # No health record
+            intensity_change = None
 
         # Encode input
         encoded_input = [label_encoders[col].transform([user_input[col]])[0] for col in features]
-        input_vector = [encoded_input]
+        input_vector = pd.DataFrame([encoded_input], columns=features)
 
-        # Predict category using model
+        # Predict category
         predicted_category_encoded = knn_model.predict(input_vector)[0]
         filtered_data = dataset[dataset["Category"] == predicted_category_encoded]
 
-        # Refine with Equipment and Level
         equipment_encoded = encoded_input[2]
         level_encoded = encoded_input[3]
         filtered_data = filtered_data[
@@ -66,7 +64,6 @@ def recommend_titles(user_input):
             (filtered_data["Level"] == level_encoded)
         ]
 
-        # Apply intensity adjustments
         if intensity_change == -1:
             filtered_data = filtered_data[
                 filtered_data["Level"] != label_encoders["Level"].transform(["Expert"])[0]
@@ -76,29 +73,34 @@ def recommend_titles(user_input):
                 filtered_data["Level"] == label_encoders["Level"].transform(["Beginner"])[0]
             ]
 
-        # Fallback logic if too few or no exercises
         if filtered_data.empty or len(filtered_data) < 7:
-            print("🔁 Fallback activated: relaxing filters")
-
             fallback_data = dataset[dataset["Category"] == predicted_category_encoded]
-
-            # Loosen filters by allowing body-only or matching level
             body_only_equipment = label_encoders["Equipment"].transform(["Body Only"])[0]
             fallback_data = fallback_data[
                 (fallback_data["Level"] == level_encoded) |
                 (fallback_data["Equipment"] == body_only_equipment)
             ]
-
             filtered_data = pd.concat([filtered_data, fallback_data]).drop_duplicates()
 
+        include_warmup = user_input.get("IncludeWarmupCooldown", "No") == "Yes"
         if filtered_data.empty:
             return {"message": "No matches found for your preferences. Try modifying your input."}
 
-        recommended_titles = filtered_data[target].unique()[:7]
-        return {"exercises": list(recommended_titles)}
+        result = {
+            "main": list(filtered_data[target].unique()[:8])
+        }
+
+        if include_warmup:
+            warmup_data = dataset[dataset["Desc"].str.contains("warm-up", case=False, na=False)]
+            cooldown_data = dataset[dataset["Desc"].str.contains("cool-down", case=False, na=False)]
+            result["warmup"] = list(warmup_data[target].unique()[:5])
+            result["cooldown"] = list(cooldown_data[target].unique()[:5])
+
+        return result
 
     except Exception as e:
         return {"error": str(e)}
+
 
 @recommendations_bp.route('/recommendations', methods=["POST"])
 def get_recommendations():
@@ -115,20 +117,25 @@ def get_recommendations():
         if "error" in recommendations:
             return jsonify(recommendations), 500
 
-        exercises = recommendations["exercises"]
-
         cursor = mysql.connection.cursor()
         cursor.execute("""
             INSERT INTO user_workout_plans (id, user_id, exercises, bmi, whr)
             VALUES (%s, %s, %s, %s, %s)
-        """, (str(uuid.uuid4()), user_id, json.dumps(exercises), bmi, whr))
+        """, (
+            str(uuid.uuid4()),
+            user_id,
+            json.dumps(recommendations),
+            bmi,
+            whr
+        ))
         mysql.connection.commit()
         cursor.close()
 
-        return jsonify({"exercises": exercises})
+        return jsonify({"exercises": recommendations})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @recommendations_bp.route('/workout/latest/<user_id>', methods=['GET'])
 def get_latest_workout_plan(user_id):
