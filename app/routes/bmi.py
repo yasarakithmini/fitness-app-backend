@@ -87,7 +87,7 @@ def get_latest_fitness_records(user_id):
                 "record_date": record[8].strftime("%Y-%m-%d %H:%M:%S")
             })
 
-        print("Fetched Records:", result)  # This will show the fetched data in your terminal
+        print("Fetched Records:", result)
         return jsonify(result), 200
 
     except Exception as e:

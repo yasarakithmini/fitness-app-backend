@@ -36,5 +36,5 @@ def contact():
 
         return jsonify({"message": "Email sent successfully"}), 200
     except Exception as e:
-        print(f"❌ Error sending email: {e}")
+        print(f" Error sending email: {e}")
         return jsonify({"error": "Failed to send email"}), 500
