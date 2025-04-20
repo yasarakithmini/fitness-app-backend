@@ -13,7 +13,7 @@ def create_app():
     app.config.from_object('app.config.Config')
     mysql.init_app(app)
 
-    # Register your blueprints
+    # Register blueprints
     from app.routes.auth import auth_bp
     from app.routes.trainers import trainers_bp
     from app.routes.meetings import meetings_bp
@@ -30,4 +30,4 @@ def create_app():
     app.register_blueprint(contact_bp)
     app.register_blueprint(profile_bp)
 
-    return app  # ✅ MAKE SURE THIS IS HERE
+    return app
